@@ -39,7 +39,7 @@ generate:
 
 serve: build
 	@echo "Starting Lora Server"
-	./build/loraserver
+	./build/loraserver --band EU_863_870
 
 update-vendor:
 	@echo "Updating vendored packages"
