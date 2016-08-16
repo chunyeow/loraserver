@@ -16,6 +16,7 @@ loraserver:
     - REDIS_URL=redis://redis:6379
     - GW_MQTT_SERVER=tcp://mosquitto:1883
     - APP_MQTT_SERVER=tcp://mosquitto:1883
+    - CONTROLLER_MQTT_SERVER=tcp://mosquitto:1883
     - TEST_POSTGRES_DSN=postgres://loraserver:loraserver@postgres_test/loraserver?sslmode=disable
     - TEST_REDIS_URL=redis://redis_test:6379
     - TEST_MQTT_SERVER=tcp://mosquitto:1883
@@ -42,3 +43,12 @@ redis_test:
 
 mosquitto:
   image: ansi/mosquitto
+
+semtechbridge:
+  image: brocaar/lora-gateway-bridge
+  links:
+    - mosquitto
+  environment:
+    - MQTT_SERVER=tcp://mosquitto:1883
+  ports:
+    - "1700:1700/udp"
