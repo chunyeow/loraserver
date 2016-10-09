@@ -20,7 +20,7 @@ test:
 		golint $$pkg ; \
 	done
 	@go vet $(PKGS)
-	@go test -p 1 -cover -v $(PKGS)
+	@go test -p 1 -v $(PKGS)
 
 package: clean build
 	@echo "Creating package for $(GOOS) $(GOARCH)"
@@ -31,9 +31,13 @@ package: clean build
 
 generate:
 	@echo "Running go generate"
-	@go generate api/api.go
-	@go generate cmd/loraserver/main.go
-	@go generate models/notifications.go
+	@go generate api/as/as.go
+	@go generate api/nc/nc.go
+	@go generate api/ns/ns.go
+
+requirements:
+	@go get -u github.com/golang/protobuf/{proto,protoc-gen-go}
+	@go get -u github.com/kardianos/govendor
 
 # shortcuts for development
 

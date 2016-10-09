@@ -8,24 +8,28 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/brocaar/loraserver/api/gw"
 	"github.com/brocaar/loraserver/internal/backend"
-	"github.com/brocaar/loraserver/models"
 	"github.com/eclipse/paho.mqtt.golang"
+	"github.com/garyburd/redigo/redis"
 )
 
 const rxTopic = "gateway/+/rx"
+const uplinkLockTTL = time.Millisecond * 500
 
 // Backend implements a MQTT pub-sub backend.
 type Backend struct {
 	conn         mqtt.Client
-	rxPacketChan chan models.RXPacket
+	rxPacketChan chan gw.RXPacket
 	wg           sync.WaitGroup
+	redisPool    *redis.Pool
 }
 
 // NewBackend creates a new Backend.
-func NewBackend(server, username, password string) (backend.Gateway, error) {
+func NewBackend(p *redis.Pool, server, username, password string) (backend.Gateway, error) {
 	b := Backend{
-		rxPacketChan: make(chan models.RXPacket),
+		rxPacketChan: make(chan gw.RXPacket),
+		redisPool:    p,
 	}
 
 	opts := mqtt.NewClientOptions()
@@ -61,12 +65,12 @@ func (b *Backend) Close() error {
 }
 
 // RXPacketChan returns the RXPacket channel.
-func (b *Backend) RXPacketChan() chan models.RXPacket {
+func (b *Backend) RXPacketChan() chan gw.RXPacket {
 	return b.rxPacketChan
 }
 
 // SendTXPacket sends the given TXPacket to the gateway.
-func (b *Backend) SendTXPacket(txPacket models.TXPacket) error {
+func (b *Backend) SendTXPacket(txPacket gw.TXPacket) error {
 	bytes, err := json.Marshal(txPacket)
 	if err != nil {
 		return fmt.Errorf("backend/gateway: tx packet marshal error: %s", err)
@@ -87,11 +91,34 @@ func (b *Backend) rxPacketHandler(c mqtt.Client, msg mqtt.Message) {
 
 	log.Info("backend/gateway: rx packet received")
 
-	var rxPacket models.RXPacket
+	var rxPacket gw.RXPacket
 	if err := json.Unmarshal(msg.Payload(), &rxPacket); err != nil {
 		log.WithFields(log.Fields{
 			"data_base64": base64.StdEncoding.EncodeToString(msg.Payload()),
 		}).Errorf("backend/gateway: unmarshal rx packet error: %s", err)
+		return
+	}
+
+	// Since with MQTT all subscribers will receive the uplink messages sent
+	// by all the gatewyas, the first instance receiving the message must lock it,
+	// so that other instances can ignore the same message (from the same gw).
+	// As an unique id, the gw mac + base64 encoded payload is used. This is because
+	// we can't trust any of the data, as the MIC hasn't been validated yet.
+	strB, err := rxPacket.PHYPayload.MarshalText()
+	if err != nil {
+		log.Errorf("backend/gateway: marshal text error: %s", err)
+	}
+	key := fmt.Sprintf("lora:ns:uplink:lock:%s:%s", rxPacket.RXInfo.MAC, string(strB))
+	redisConn := b.redisPool.Get()
+	defer redisConn.Close()
+
+	_, err = redis.String(redisConn.Do("SET", key, "lock", "PX", int64(uplinkLockTTL/time.Millisecond), "NX"))
+	if err != nil {
+		if err == redis.ErrNil {
+			// the payload is already being processed by an other instance
+			return
+		}
+		log.Errorf("backend/gateway:: acquire uplink payload lock error: %s", err)
 		return
 	}
 
